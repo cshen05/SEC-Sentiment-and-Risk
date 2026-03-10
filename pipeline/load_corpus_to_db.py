@@ -1,6 +1,13 @@
 import json
 import os
+import sys
+from pathlib import Path
 from typing import Any
+
+# Allow this script to be run directly from the project root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from pipeline.db import get_connection
 
@@ -15,6 +22,7 @@ def get_value(record: dict[str, Any], *keys: str, default: Any = None) -> Any:
     return default
 
 
+
 def normalize_text(text: Any) -> str | None:
     """Convert text to a clean string for database insertion."""
     if text is None:
@@ -24,9 +32,124 @@ def normalize_text(text: Any) -> str | None:
     return text or None
 
 
-def get_connection() -> PGConnection:
-    """Create a PostgreSQL connection using environment variables or defaults."""
-    return psycopg2.connect(**DB_CONFIG)
+# --- Added helpers for more flexible corpus schemas ---
+def get_nested_value(record: dict[str, Any], *paths: tuple[str, ...], default: Any = None) -> Any:
+    """Return the first non-null value found across possible nested key paths."""
+    for path in paths:
+        current: Any = record
+        found = True
+        for key in path:
+            if not isinstance(current, dict) or key not in current:
+                found = False
+                break
+            current = current[key]
+        if found and current is not None:
+            return current
+    return default
+
+
+def extract_record_fields(record: dict[str, Any]) -> dict[str, Any]:
+    """Map different corpus JSON schemas into the DB loader's expected fields."""
+    raw_company = get_value(record, "company", "company_name", "company_name_normalized")
+    ticker = get_value(record, "ticker", "symbol", "stock", "company_ticker")
+    form_type = get_value(record, "form_type", "form", "filing_type")
+    filing_date = get_value(record, "filing_date", "date", "filed_at", "filed_on")
+    accession_number = get_value(record, "accession_number", "accession", "accession_no")
+    section = get_value(record, "section", "section_name", "item")
+    text = normalize_text(get_value(record, "normalized_text", "text", "paragraph", "paragraph_text", "content"))
+    company_name = str(raw_company).strip() if raw_company is not None else None
+    cik = get_value(record, "cik")
+
+    if isinstance(cik, list):
+        cik = cik[0] if cik else None
+
+    # Support nested metadata/file info shapes produced by some corpus builders.
+    ticker = ticker or get_nested_value(
+        record,
+        ("metadata", "ticker"),
+        ("filing", "ticker"),
+        ("filing_meta", "ticker"),
+        ("company", "ticker"),
+        default=None,
+    )
+    form_type = form_type or get_nested_value(
+        record,
+        ("metadata", "form_type"),
+        ("metadata", "form"),
+        ("filing", "form_type"),
+        ("filing", "form"),
+        ("filing_meta", "form_type"),
+        default=None,
+    )
+    filing_date = filing_date or get_nested_value(
+        record,
+        ("metadata", "filing_date"),
+        ("metadata", "date"),
+        ("filing", "filing_date"),
+        ("filing", "date"),
+        ("filing_meta", "filing_date"),
+        default=None,
+    )
+    accession_number = accession_number or get_nested_value(
+        record,
+        ("metadata", "accession_number"),
+        ("metadata", "accession"),
+        ("filing", "accession_number"),
+        ("filing", "accession"),
+        ("filing_meta", "accession_number"),
+        default=None,
+    )
+    section = section or get_nested_value(
+        record,
+        ("metadata", "section"),
+        ("filing", "section"),
+        default=None,
+    )
+    text = text or normalize_text(
+        get_nested_value(
+            record,
+            ("metadata", "text"),
+            ("paragraph_data", "text"),
+            ("paragraph_data", "paragraph_text"),
+            default=None,
+        )
+    )
+    company_name = company_name or get_nested_value(
+        record,
+        ("metadata", "company_name"),
+        ("filing", "company_name"),
+        ("company", "name"),
+        default=None,
+    )
+    cik = cik or get_nested_value(
+        record,
+        ("metadata", "cik"),
+        ("filing", "cik"),
+        ("filing_meta", "cik"),
+        default=None,
+    )
+
+    if isinstance(cik, list):
+        cik = cik[0] if cik else None
+
+    # This corpus stores the ticker in `company` (e.g. "AAPL").
+    if ticker is None and company_name:
+        ticker = company_name
+
+    if ticker is None and cik is not None:
+        ticker = str(cik).strip()
+
+    return {
+        "ticker": ticker,
+        "company_name": company_name,
+        "form_type": form_type,
+        "filing_date": filing_date,
+        "accession_number": accession_number,
+        "section": section,
+        "text": text,
+    }
+
+
 
 
 def main() -> None:
@@ -40,6 +163,9 @@ def main() -> None:
         raise ValueError("Corpus JSON must be a non-empty list of paragraph records.")
 
     print(f"[INFO] Loaded {len(data)} paragraph records from {INPUT_FILE}")
+
+    sample_keys = list(data[0].keys()) if data and isinstance(data[0], dict) else []
+    print(f"[DEBUG] First record keys: {sample_keys}")
 
     conn = get_connection()
     cur = conn.cursor()
@@ -56,20 +182,21 @@ def main() -> None:
                 print(f"[WARN] Skipping record {idx}: expected object, got {type(record).__name__}")
                 continue
 
-            ticker = get_value(record, "ticker", default=None)
-            company_name = get_value(record, "company_name", "company", default=None)
-            form_type = get_value(record, "form_type", "form", default=None)
-            filing_date = get_value(record, "filing_date", "date", default=None)
-            accession_number = get_value(record, "accession_number", "accession", default=None)
-            section = get_value(record, "section", default=None)
-            text = normalize_text(get_value(record, "text", default=None))
+            fields = extract_record_fields(record)
+            ticker = fields["ticker"]
+            company_name = fields["company_name"]
+            form_type = fields["form_type"]
+            filing_date = fields["filing_date"]
+            accession_number = fields["accession_number"]
+            section = fields["section"]
+            text = fields["text"]
 
             if not ticker or not form_type or not accession_number or not text:
                 skipped_records += 1
                 print(
-                    "[WARN] Skipping record "
-                    f"{idx}: missing one of required fields "
-                    "(ticker, form_type/form, accession_number/accession, text)"
+                    f"[WARN] Skipping record {idx}: "
+                    f"ticker={ticker!r}, form_type={form_type!r}, accession_number={accession_number!r}, "
+                    f"text_present={bool(text)}"
                 )
                 continue
 
