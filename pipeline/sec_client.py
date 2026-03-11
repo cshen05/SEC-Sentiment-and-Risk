@@ -262,6 +262,18 @@ def get_all_filings_for_company(
         )
 
         hits = extract_hits(data)
+        if hits and from_index == 0:
+            print("[DEBUG] RAW FIRST HIT KEYS:", list(hits[0].keys()))
+            source = hits[0].get("_source", hits[0])
+            if isinstance(source, dict):
+                print("[DEBUG] RAW FIRST HIT _source KEYS:", list(source.keys()))
+                print("[DEBUG] RAW FIRST HIT filedAt:", source.get("filedAt"))
+                print("[DEBUG] RAW FIRST HIT periodOfReport:", source.get("periodOfReport"))
+                print("[DEBUG] RAW FIRST HIT accessionNo:", source.get("accessionNo"))
+                print("[DEBUG] RAW FIRST HIT accessionNumber:", source.get("accessionNumber"))
+                print("[DEBUG] RAW FIRST HIT adsh:", source.get("adsh"))
+            print("[DEBUG] RAW FIRST HIT FULL:", hits[0])
+
         if not hits:
             break
 

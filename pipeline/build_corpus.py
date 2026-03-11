@@ -71,14 +71,44 @@ def build_corpus_for_company(
         )
 
         for filing_index, hit in enumerate(filing_hits):
-            source = hit.get("_source", {})
+            source = hit.get("_source", hit)
             accession_number = (
-                source.get("adsh")
+                hit.get("adsh")
+                or hit.get("accessionNo")
+                or hit.get("accessionNumber")
+                or source.get("adsh")
                 or source.get("accessionNo")
                 or source.get("accessionNumber")
             )
-            filing_date = source.get("filedAt")
-            cik = source.get("ciks")
+
+            filed_at = (
+                hit.get("filedAt")
+                or source.get("filedAt")
+                or hit.get("file_date")
+                or source.get("file_date")
+                or hit.get("periodOfReport")
+                or source.get("periodOfReport")
+                or hit.get("period_ending")
+                or source.get("period_ending")
+            )
+            filing_date = (
+                filed_at.split("T")[0]
+                if isinstance(filed_at, str) and "T" in filed_at
+                else filed_at
+            )
+
+            cik = (
+                hit.get("cik")
+                or source.get("cik")
+                or hit.get("ciks")
+                or source.get("ciks")
+            )
+
+            if filing_index == 0:
+                print(
+                    f"[DEBUG] {company} | {form_type} | accession={accession_number} | "
+                    f"filing_date={filing_date} | cik={cik}"
+                )
 
             try:
                 filing_text = get_filing_text_from_hit(hit)
