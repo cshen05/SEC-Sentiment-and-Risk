@@ -10,7 +10,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from pipeline.db import get_connection
 
 OUTPUT_DIR = PROJECT_ROOT / "data" / "reports"
 FULL_OUTPUT_PATH = OUTPUT_DIR / "paragraph_predictions_full.csv"
@@ -22,6 +21,8 @@ TOP_RISK_PER_FILING = 5
 
 def fetch_prediction_dataframe() -> pd.DataFrame:
     """Load paragraph-level predictions joined with filing metadata."""
+    from pipeline.db import get_connection
+
     conn = get_connection()
     query = """
         SELECT
@@ -62,12 +63,12 @@ def fetch_prediction_dataframe() -> pd.DataFrame:
 
 
 def build_filing_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate prediction counts and confidence metrics at the filing level."""
     # pivot_table drops rows when index columns contain NaN (e.g., filing_date).
     # Replace NaN filing_date values so all rows participate in aggregation.
     df = df.copy()
     if df["filing_date"].isna().any():
         df["filing_date"] = df["filing_date"].fillna("unknown_date")
-    """Aggregate prediction counts and confidence metrics at the filing level."""
     base = (
         df.groupby([
             "filing_id",
