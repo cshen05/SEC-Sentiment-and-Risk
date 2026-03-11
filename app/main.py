@@ -55,3 +55,11 @@ def predict_batch(request: PredictBatchRequest):
         raise HTTPException(status_code=400, detail="Batch input must contain at least one non-empty text.")
 
     return [predict(text) for text in cleaned_texts]
+
+@app.get("/")
+def root():
+    return {
+        "message": "SEC Sentiment and Risk API",
+        "docs": "/docs",
+        "health": "/health"
+    }
